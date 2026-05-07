@@ -1,0 +1,57 @@
+{
+  "name": "VLA Agent App",
+  "short_name": "VLA Sales",
+  "description": "Vanguard Life Assurance — Sales & Quotation App for Agents",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#641414",
+  "theme_color": "#641414",
+  "lang": "en",
+  "scope": "./",
+  "categories": ["finance", "business", "productivity"],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Quote",
+      "short_name": "Quote",
+      "description": "Go to the Quotes hub",
+      "url": "./index.html#quotes-hub",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Manga Yako",
+      "short_name": "Manga Yako",
+      "description": "Open Manga Yako calculator",
+      "url": "./index.html#manga-yako",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false
+}
