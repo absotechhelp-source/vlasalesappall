@@ -3,8 +3,8 @@
    Vanguard Life Assurance Company Limited
    ═══════════════════════════════════════════════════════ */
 
-const CACHE_NAME    = 'vla-app-v2';
-const RUNTIME_CACHE = 'vla-runtime-v2';
+const CACHE_NAME    = 'vla-app-v3';
+const RUNTIME_CACHE = 'vla-runtime-v3';
 
 /* Core app shell — cached on install */
 const APP_SHELL = [

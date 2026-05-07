@@ -548,9 +548,18 @@ input:checked+.tog-trk:before{transform:translateX(17px)}
           <span class="dash-stat-label">Quotes this session</span>
           <span class="dash-stat-val" id="dash-quote-count">0</span>
         </div>
-        <div class="dash-stat-row" style="margin-bottom:18px">
+        <div class="dash-stat-row" style="margin-bottom:8px">
           <span class="dash-stat-label">Total quotes saved</span>
           <span class="dash-stat-val" id="dash-total-count">0</span>
+        </div>
+        <!-- Offline sync queue pill -->
+        <div id="sync-queue-pill" onclick="flushSyncQueue(false)" style="display:none;cursor:pointer;align-items:center;gap:8px;background:#fef3c7;border:1px solid #fbbf24;border-radius:10px;padding:10px 14px;margin-bottom:16px">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#92400e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.88"/></svg>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;font-weight:700;color:#78350f"><span class="sq-count">0</span> quote(s) not yet synced to Sheets</div>
+            <div style="font-size:10px;color:#92400e;margin-top:1px">Tap to sync now · Auto-syncs when online</div>
+          </div>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#b45309" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
         </div>
 
         <!-- New Quote -->
@@ -2028,6 +2037,12 @@ input:checked+.tog-trk:before{transform:translateX(17px)}
           <div id="conn-status" style="font-size:12px;color:var(--T2);display:none;margin-top:6px"></div>
         </div>
 
+        <!-- Pending Sync -->
+        <div class="card" id="sync-queue-card" style="display:none;border:1.5px solid #fbbf24;background:#fffbeb">
+          <div class="sec-lbl" style="color:#92400e">⏳ Pending Sync</div>
+          <div id="sync-queue-profile"></div>
+        </div>
+
         <!-- PWA Install -->
         <div class="card">
           <div class="sec-lbl">Install App</div>
@@ -2841,6 +2856,121 @@ const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz2haXwhNto_HFk
 const ADMIN_USER = 'VLA Admin';
 const ADMIN_PIN  = '9999';  // Admin PIN — change via admin panel
 
+/* ═══════════════════════════════════════════════════════════
+   OFFLINE SYNC QUEUE
+   Every failed sync call enqueues its payload here.
+   Queue is flushed automatically on:
+     1. Successful login
+     2. browser 'online' event (network restored)
+     3. Manual tap of the pending badge
+═══════════════════════════════════════════════════════════ */
+const SYNC_QUEUE_KEY = 'vla_sync_queue';
+
+function getSyncQueue(){
+  try{ return JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY)||'[]'); }
+  catch(e){ return []; }
+}
+
+function enqueueSyncPayload(payload, label){
+  const q = getSyncQueue();
+  // Deduplicate by ref — never queue the same quote twice
+  if(payload.Reference||payload.QuoteRef||payload.Ref){
+    const ref = payload.Reference||payload.QuoteRef||payload.Ref;
+    if(q.find(item=>item.ref===ref)) return;
+  }
+  q.push({
+    ref:        payload.Reference||payload.QuoteRef||payload.Ref||('Q-'+Date.now()),
+    label:      label||payload.action||'Quote',
+    enqueuedAt: new Date().toISOString(),
+    payload
+  });
+  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(q));
+  renderSyncBadge();
+}
+
+function removeSyncQueueItem(ref){
+  const q = getSyncQueue().filter(item=>item.ref!==ref);
+  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(q));
+}
+
+/* Attempt to flush every pending item to Sheets */
+async function flushSyncQueue(silent){
+  const queue = getSyncQueue();
+  if(!queue.length) return;
+
+  const url = localStorage.getItem(SHEETS_URL_KEY)||APPS_SCRIPT_URL;
+  if(!url) return;
+
+  // Quick connectivity check — abort if we're still offline
+  if(!navigator.onLine) return;
+
+  if(!silent) showToast('📤 Syncing '+queue.length+' pending quote'+(queue.length>1?'s':'')+'…', 2500);
+
+  let flushed = 0, failed = 0;
+
+  for(const item of queue){
+    try{
+      await fetch(url,{
+        method:'POST',
+        mode:'no-cors',
+        body:JSON.stringify(item.payload)
+      });
+      removeSyncQueueItem(item.ref);
+      flushed++;
+    } catch(e){
+      failed++;
+    }
+  }
+
+  renderSyncBadge();
+
+  if(flushed>0 && !silent){
+    showToast('✅ '+flushed+' quote'+(flushed>1?'s':'')+' synced to Google Sheets'+(failed>0?' ('+failed+' still pending)':''), 3500);
+  }
+}
+
+/* Render the pending-sync badge on home dashboard and profile tab */
+function renderSyncBadge(){
+  const count = getSyncQueue().length;
+
+  // Home dashboard pill
+  const pill = document.getElementById('sync-queue-pill');
+  if(pill){
+    pill.style.display = count > 0 ? 'flex' : 'none';
+    const sq = pill.querySelector('.sq-count');
+    if(sq) sq.textContent = count;
+  }
+
+  // Profile card
+  const card = document.getElementById('sync-queue-card');
+  if(card) card.style.display = count > 0 ? 'block' : 'none';
+
+  // Profile detail list
+  const profBadge = document.getElementById('sync-queue-profile');
+  if(profBadge){
+    if(count > 0){
+      profBadge.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'+
+          '<span style="font-size:12px;color:#92400e">'+count+' quote'+(count>1?'s':'')+' waiting to sync</span>'+
+          '<button class="btn-sm" style="background:var(--M);color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer" onclick="flushSyncQueue(false)">Sync Now</button>'+
+        '</div>'+
+        getSyncQueue().map(item=>
+          '<div style="font-size:11px;padding:4px 0;border-bottom:1px solid #fde68a;display:flex;justify-content:space-between;align-items:center">'+
+            '<span><strong style="color:var(--T)">'+item.label+'</strong><br><span style="color:#92400e;font-size:10px">'+item.ref+'</span></span>'+
+            '<span style="color:#a16207;font-size:10px">'+fmtDate(item.enqueuedAt.split('T')[0])+'</span>'+
+          '</div>'
+        ).join('');
+    } else {
+      profBadge.innerHTML = '';
+    }
+  }
+}
+
+/* Listen for browser coming back online and auto-flush */
+window.addEventListener('online', ()=>{
+  setTimeout(()=>flushSyncQueue(false), 1500); // small delay to let connection stabilise
+});
+
 /* ── Agent store: localStorage cache + Sheets source of truth ── */
 function getAgents(){
   const stored = localStorage.getItem(AGENTS_KEY);
@@ -3180,6 +3310,8 @@ async function doLogin(){
     // Re-run renderHomeDash after reflow settles (belt-and-braces)
     setTimeout(renderHomeDash, 80);
     showToast('Welcome, '+user+'!');
+    // Flush any quotes that were saved while offline
+    setTimeout(()=>flushSyncQueue(true), 2000);
   } else {
     err.style.display='block';
     document.getElementById('l-pin').value='';
@@ -3686,8 +3818,8 @@ async function syncToSheets(q){
     ss.innerHTML='<span class="sync-dot"></span><span>✓ Saved to Google Sheets</span>';
   }catch(err){
     ss.className='sync-pill sync-fail';
-    ss.innerHTML='<span class="sync-dot"></span><span>⚠️ Saved locally only</span>';
-    // Suppress console noise — sync failures are expected on poor connectivity
+    ss.innerHTML='<span class="sync-dot"></span><span>⚠️ Saved locally — will sync when online</span>';
+    enqueueSyncPayload(payload, 'PSP Quote · '+(q.clientName||q.ref||''));
   }
 }
 
@@ -4417,7 +4549,6 @@ function closeMore(){
    HOME DASHBOARD
 ═══════════════════════════════════════════ */
 function renderHomeDash(){
-  // Show admin tile only for admin users
   var adminTile = document.getElementById('admin-home-tile');
   if(adminTile) adminTile.style.display = isAdmin ? 'flex' : 'none';
   const nameEl=document.getElementById('home-agent-name');
@@ -4433,6 +4564,8 @@ function renderHomeDash(){
   if(profName)profName.textContent=currentAgent;
   const profRole=document.getElementById('prof-role');
   if(profRole)profRole.textContent=isAdmin?'Administrator':'Sales Agent';
+  // Show pending sync badge if any queued items
+  renderSyncBadge();
 }
 
 function renderQuotesHub(){
@@ -5056,7 +5189,8 @@ async function mySyncToSheets(q){
     ss.innerHTML='<span class="sync-dot"></span><span>✓ Saved to Google Sheets</span>';
   }catch(err){
     ss.className='sync-pill sync-fail';
-    ss.innerHTML='<span class="sync-dot"></span><span>⚠️ Saved locally only</span>';
+    ss.innerHTML='<span class="sync-dot"></span><span>⚠️ Saved locally — will sync when online</span>';
+    enqueueSyncPayload(payload, 'Manga Yako · '+(q.clientName||q.ref||''));
   }
 }
 
@@ -5544,12 +5678,9 @@ async function myPropSyncToSheets(d){
     ss.innerHTML='<span class="sync-dot"></span><span>✓ Saved · Team Leader notified</span>';
   }catch(err){
     ss.className='sync-pill sync-fail';
-    ss.innerHTML='<span class="sync-dot"></span><span>⚠️ Saved locally only</span>';
+    ss.innerHTML='<span class="sync-dot"></span><span>⚠️ Saved locally — will sync when online</span>';
+    enqueueSyncPayload(payload, 'Proposal · '+(d.clientName||d.ref||''));
   }
-}
-
-/* ── PDF ── */
-function myPropGeneratePDF(){
   if(!myPropData){showToast('No proposal to export');return;}
   captureQuotePDF('prop-doc','VLA-Proposal-'+myPropData.ref+'.pdf',function(pdf,filename){
     pdf.save(filename);
@@ -6440,7 +6571,10 @@ function phinduSaveSync(){
   };
   fetch(url,{method:'POST',mode:'no-cors',body:JSON.stringify(payload)})
     .then(()=>{if(ss){ss.textContent='\u2713 Saved to Google Sheets';ss.style.color='var(--M)';ss.style.display='block';}})
-    .catch(()=>{if(ss){ss.textContent='\u26a0 Saved locally only';ss.style.color='#d97706';ss.style.display='block';}});
+    .catch(()=>{
+      if(ss){ss.textContent='\u26a0 Saved locally \u2014 will sync when online';ss.style.color='#d97706';ss.style.display='block';}
+      enqueueSyncPayload(payload, 'Phindu · '+(q.name||q.ref||''));
+    });
 }
 
 /* -- Reset -- */
@@ -7419,7 +7553,8 @@ async function eduSyncToSheets(q){
     ss.innerHTML='<span class="sync-dot"></span><span>✓ Saved to Google Sheets</span>';
   } catch(err) {
     ss.className='sync-pill sync-fail';
-    ss.innerHTML='<span class="sync-dot"></span><span>⚠ Saved locally only</span>';
+    ss.innerHTML='<span class="sync-dot"></span><span>⚠️ Saved locally — will sync when online</span>';
+    enqueueSyncPayload(payload, (q.planName||'Edu Plan')+' · '+(q.parentName||q.ref||''));
   }
 }
 
