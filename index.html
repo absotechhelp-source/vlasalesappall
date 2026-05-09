@@ -2972,13 +2972,24 @@ window.addEventListener('online', ()=>{
 });
 
 /* ── Agent store: localStorage cache + Sheets source of truth ── */
+const SESSION_KEY = 'vla_session_v1';
 function getAgents(){
-  const stored = localStorage.getItem(AGENTS_KEY);
-  if(stored) return JSON.parse(stored);
-  return {'VLA Agent':{pin:'1625',role:'agent',active:true},'VLA Admin':{pin:'9999',role:'admin',active:true}};
+  const DEFAULTS = {'VLA Agent':{pin:'1625',role:'agent',active:true},'VLA Admin':{pin:'9999',role:'admin',active:true}};
+  try {
+    const stored = localStorage.getItem(AGENTS_KEY);
+    if(stored) {
+      const parsed = JSON.parse(stored);
+      // Basic sanity check — must be a non-null object
+      if(parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    }
+  } catch(e) {
+    // Corrupted data — wipe it so next login uses defaults and re-seeds cleanly
+    try { localStorage.removeItem(AGENTS_KEY); } catch(_){}
+  }
+  return DEFAULTS;
 }
 function saveAgents(agents){
-  localStorage.setItem(AGENTS_KEY, JSON.stringify(agents));
+  try { localStorage.setItem(AGENTS_KEY, JSON.stringify(agents)); } catch(e){}
 }
 
 // Fetch fresh agent list from Google Sheets and update local cache
@@ -3270,6 +3281,41 @@ window.addEventListener('DOMContentLoaded',()=>{
   // Set Manga Yako date of quote to today
   const myDoqEl=document.getElementById('my-doq');
   if(myDoqEl)myDoqEl.value=today;
+
+  // ── Session restore: if the agent was already logged in (e.g. page pulled to refresh),
+  //    restore their session automatically so they never see the login screen ──
+  try {
+    const saved = JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
+    if(saved && saved.agent && typeof saved.agent === 'string') {
+      // Verify the agent still exists and is active before restoring
+      const agents = getAgents();
+      const agentRecord = agents[saved.agent];
+      if(agentRecord && agentRecord.active) {
+        currentAgent = saved.agent;
+        isAdmin = !!saved.isAdmin;
+        renderHomeDash();
+        document.getElementById('screen-login').classList.remove('active');
+        document.getElementById('screen-app').classList.add('active');
+        document.getElementById('topbar-agent-name').textContent='VLA Sales App · '+currentAgent+(isAdmin?' [Admin]':'');
+        document.getElementById('set-agentname').textContent=currentAgent;
+        document.getElementById('set-role').textContent=isAdmin?'Administrator':'Sales Agent';
+        document.getElementById('set-role').style.background=isAdmin?'#ede9fe':'';
+        document.getElementById('set-role').style.color=isAdmin?'#6d28d9':'';
+        const moreAdmin=document.getElementById('more-admin-item');
+        if(moreAdmin)moreAdmin.style.display=isAdmin?'flex':'none';
+        loadProfileData();
+        switchTab('home');
+        setTimeout(renderHomeDash, 80);
+        setTimeout(()=>flushSyncQueue(true), 2000);
+      } else {
+        // Agent was deactivated or removed — clear the stale session
+        localStorage.removeItem(SESSION_KEY);
+      }
+    }
+  } catch(e) {
+    // Corrupted session data — clear it silently
+    try { localStorage.removeItem(SESSION_KEY); } catch(_){}
+  }
 });
 
 /* ═══════════════════════════════════════════
@@ -3290,6 +3336,8 @@ async function doLogin(){
   if(agent && agent.active && agent.pin===pin){
     currentAgent=user;
     isAdmin=(agent.role==='admin');
+    // Persist session so a pull-to-refresh doesn't log the agent out
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({agent:user, isAdmin:isAdmin})); } catch(e){}
     // Render home dashboard BEFORE screen becomes visible — prevents stale HTML flash
     renderHomeDash();
     err.style.display='none';
@@ -3319,6 +3367,8 @@ async function doLogin(){
   }
 }
 function doLogout(){
+  // Clear persisted session so the agent is not auto-restored on next page load
+  try { localStorage.removeItem(SESSION_KEY); } catch(e){}
   currentAgent='';isAdmin=false;anb=null;selectedOcc=null;quoteData=null;histModalQuote=null;
   myQuoteData=null;myAnb=null;myPropData=null;
   phinduQuoteData=null;phinduAnb=null;phinduPropData=null;
