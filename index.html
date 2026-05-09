@@ -3293,23 +3293,26 @@ window.addEventListener('DOMContentLoaded',()=>{
       if(agentRecord && agentRecord.active) {
         currentAgent = saved.agent;
         isAdmin = !!saved.isAdmin;
-        renderHomeDash();
-        document.getElementById('screen-login').classList.remove('active');
-        document.getElementById('screen-app').classList.add('active');
-        document.getElementById('topbar-agent-name').textContent='VLA Sales App · '+currentAgent+(isAdmin?' [Admin]':'');
-        document.getElementById('set-agentname').textContent=currentAgent;
-        document.getElementById('set-role').textContent=isAdmin?'Administrator':'Sales Agent';
-        document.getElementById('set-role').style.background=isAdmin?'#ede9fe':'';
-        document.getElementById('set-role').style.color=isAdmin?'#6d28d9':'';
+        // Helper: safely get element and set a property (never throws if element missing)
+        function _set(id, prop, val){ const el=document.getElementById(id); if(el) el[prop]=val; }
+        function _style(id, prop, val){ const el=document.getElementById(id); if(el) el.style[prop]=val; }
+        try { renderHomeDash(); } catch(e){}
+        _set('screen-login','className','screen');
+        _set('screen-app','className','screen active');
+        _set('topbar-agent-name','textContent','VLA Sales App · '+currentAgent+(isAdmin?' [Admin]':''));
+        _set('set-agentname','textContent',currentAgent);
+        _set('set-role','textContent',isAdmin?'Administrator':'Sales Agent');
+        _style('set-role','background',isAdmin?'#ede9fe':'');
+        _style('set-role','color',isAdmin?'#6d28d9':'');
         const moreAdmin=document.getElementById('more-admin-item');
-        if(moreAdmin)moreAdmin.style.display=isAdmin?'flex':'none';
-        loadProfileData();
-        switchTab('home');
-        setTimeout(renderHomeDash, 80);
-        setTimeout(()=>flushSyncQueue(true), 2000);
+        if(moreAdmin) moreAdmin.style.display=isAdmin?'flex':'none';
+        try { loadProfileData(); } catch(e){}
+        try { switchTab('home'); } catch(e){}
+        setTimeout(()=>{ try{ renderHomeDash(); }catch(e){} }, 80);
+        setTimeout(()=>{ try{ flushSyncQueue(true); }catch(e){} }, 2000);
       } else {
         // Agent was deactivated or removed — clear the stale session
-        localStorage.removeItem(SESSION_KEY);
+        try { localStorage.removeItem(SESSION_KEY); } catch(_){}
       }
     }
   } catch(e) {
@@ -3345,9 +3348,8 @@ async function doLogin(){
     document.getElementById('screen-app').classList.add('active');
     document.getElementById('topbar-agent-name').textContent='VLA Sales App · '+user+(isAdmin?' [Admin]':'');
     document.getElementById('set-agentname').textContent=user;
-    document.getElementById('set-role').textContent=isAdmin?'Administrator':'Sales Agent';
-    document.getElementById('set-role').style.background=isAdmin?'#ede9fe':'';
-    document.getElementById('set-role').style.color=isAdmin?'#6d28d9':'';
+    const _setRole=document.getElementById('set-role');
+    if(_setRole){_setRole.textContent=isAdmin?'Administrator':'Sales Agent';_setRole.style.background=isAdmin?'#ede9fe':'';_setRole.style.color=isAdmin?'#6d28d9':'';}
     // Show admin option in More menu
     const moreAdmin=document.getElementById('more-admin-item');
     if(moreAdmin)moreAdmin.style.display=isAdmin?'flex':'none';
@@ -3385,8 +3387,8 @@ function doLogout(){
   document.getElementById('l-user').value='';
   document.getElementById('l-pin').value='';
   document.getElementById('l-err').style.display='none';
-  document.getElementById('nav-admin').style.display='none';
-  resetQuote();
+  const _navAdmin=document.getElementById('nav-admin'); if(_navAdmin)_navAdmin.style.display='none';
+  resetQuote(true);
 }
 
 /* ═══════════════════════════════════════════
@@ -4804,7 +4806,7 @@ function resetAltForm(){
 /* ═══════════════════════════════════════════
    RESET QUOTE
 ═══════════════════════════════════════════ */
-function resetQuote(){
+function resetQuote(silent){
   // Clear all data state
   quoteData=null; selectedOcc=null; anb=null;
   // Clear all form fields
@@ -4835,17 +4837,20 @@ function resetQuote(){
     `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
   clrErr();
   setMode('sa');
-  switchTab('quote');
-  // Small delay to let DOM settle, then show gen-btn
-  setTimeout(()=>{
-    const gb=document.getElementById('gen-btn');
-    if(gb) gb.style.display='flex';
-    document.getElementById('quote-output').style.display='none';
-    const ab=document.getElementById('app-body');
-    if(ab) ab.scrollTop=0;
-    document.title = 'VLA Agent App';
-    showToast('Ready for new quote');
-  }, 50);
+  if(!silent){
+    switchTab('quote');
+    // Small delay to let DOM settle, then show gen-btn
+    setTimeout(()=>{
+      const gb=document.getElementById('gen-btn');
+      if(gb) gb.style.display='flex';
+      const qo=document.getElementById('quote-output');
+      if(qo) qo.style.display='none';
+      const ab=document.getElementById('app-body');
+      if(ab) ab.scrollTop=0;
+      document.title = 'VLA Agent App';
+      showToast('Ready for new quote');
+    }, 50);
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -6000,18 +6005,36 @@ if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js')
       .then(reg => {
-        // Check for updates every 30 minutes
-        setInterval(() => reg.update(), 30 * 60 * 1000);
+        // Check for updates every 10 minutes (was 30)
+        setInterval(() => reg.update(), 10 * 60 * 1000);
         reg.addEventListener('updatefound', () => {
           const nw = reg.installing;
           nw.addEventListener('statechange', () => {
             if(nw.state === 'installed' && navigator.serviceWorker.controller){
-              showToast('📲 App update available — refresh to install', 5000);
+              // Tell the new service worker to take over immediately
+              nw.postMessage({type:'SKIP_WAITING'});
             }
           });
         });
       })
       .catch(() => {});
+
+    // When the new service worker takes control, reload the page automatically
+    // This happens in the background — agent just sees the latest version next time
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if(!refreshing){
+        refreshing = true;
+        // Only auto-reload if the app is in the background or idle (not mid-quote)
+        const isBusy = !!document.querySelector('.modal-overlay[style*="flex"]');
+        if(!isBusy){
+          window.location.reload();
+        } else {
+          // App is in use — show a gentle banner instead of force-reloading
+          showToast('📲 Update ready — will apply on next open', 6000);
+        }
+      }
+    });
   });
 }
 
