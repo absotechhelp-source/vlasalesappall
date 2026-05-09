@@ -1,87 +1,86 @@
 /* ═══════════════════════════════════════════════════════
-   VLA Agent App — Service Worker  v1.0
-   Vanguard Life Assurance Company Limited
-   ═══════════════════════════════════════════════════════ */
+   VLA Sales App — Service Worker
+   Handles offline caching + automatic silent updates
+═══════════════════════════════════════════════════════ */
 
-const CACHE_NAME    = 'vla-app-v3';
-const RUNTIME_CACHE = 'vla-runtime-v3';
+// ── Bump this version string every time you deploy a new build ──
+// The browser detects the change and triggers the update flow.
+const CACHE_VERSION = 'vla-v2.1';
+const CACHE_NAME = CACHE_VERSION;
 
-/* Core app shell — cached on install */
-const APP_SHELL = [
+// Files to cache for offline use
+const PRECACHE_URLS = [
+  './',
   './index.html',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
 ];
 
-/* External resources to cache when first fetched */
-const RUNTIME_ORIGINS = [
-  'https://fonts.googleapis.com',
-  'https://fonts.gstatic.com'
-];
-
-/* ── INSTALL: pre-cache app shell ── */
+// ── Install: cache essential files ──
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(PRECACHE_URLS).catch(() => {
+        // If some assets are missing, still install — don't block
+        return cache.add('./index.html');
+      });
+    })
   );
+  // Do NOT call skipWaiting() here — we wait for the app to signal readiness
 });
 
-/* ── ACTIVATE: clean up old caches ── */
+// ── Activate: delete old caches from previous versions ──
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
       Promise.all(
         keys
-          .filter(k => k !== CACHE_NAME && k !== RUNTIME_CACHE)
-          .map(k => caches.delete(k))
+          .filter(key => key !== CACHE_NAME)
+          .map(key => caches.delete(key))
       )
     ).then(() => self.clients.claim())
   );
 });
 
-/* ── FETCH: network-first for API, cache-first for shell ── */
+// ── Fetch: serve from cache, fall back to network ──
 self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
+  // Only handle GET requests for same-origin assets
+  if(event.request.method !== 'GET') return;
+  if(!event.request.url.startsWith(self.location.origin)) return;
 
-  /* Never intercept cross-origin API calls (Google Apps Script) */
-  if (url.hostname.includes('script.google.com')) return;
-  if (url.hostname.includes('wa.me'))              return;
-
-  /* For same-origin requests and allowed external origins */
-  if (url.origin === self.location.origin || RUNTIME_ORIGINS.some(o => url.href.startsWith(o))) {
-    event.respondWith(cacheFirst(event.request));
+  // For navigation (page loads): network-first so agents always get latest HTML
+  if(event.request.mode === 'navigate'){
+    event.respondWith(
+      fetch(event.request)
+        .then(res => {
+          // Cache the fresh response for offline fallback
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+          return res;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
   }
+
+  // For all other assets: cache-first
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      return cached || fetch(event.request).then(res => {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+        return res;
+      });
+    }).catch(() => caches.match('./index.html'))
+  );
 });
 
-/* Cache-first strategy: serve from cache, fall back to network, cache new response */
-async function cacheFirst(request) {
-  const cached = await caches.match(request);
-  if (cached) return cached;
-
-  try {
-    const networkResponse = await fetch(request);
-    /* Only cache successful, non-opaque responses */
-    if (networkResponse && networkResponse.status === 200 && networkResponse.type !== 'opaque') {
-      const cache = await caches.open(RUNTIME_CACHE);
-      cache.put(request, networkResponse.clone());
-    }
-    return networkResponse;
-  } catch (err) {
-    /* Offline fallback: return app shell */
-    const fallback = await caches.match('./index.html');
-    return fallback || new Response('Offline — VLA App not cached yet.', {
-      status: 503, headers: { 'Content-Type': 'text/plain' }
-    });
-  }
-}
-
-/* ── MESSAGE: force cache refresh ── */
+// ── Message handler: app signals the SW to take over immediately ──
+// This is called by index.html when a new version is ready,
+// triggering a silent automatic reload on all open tabs.
 self.addEventListener('message', event => {
-  if (event.data === 'skipWaiting') self.skipWaiting();
-  if (event.data === 'clearCache') {
-    caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))));
+  if(event.data && event.data.type === 'SKIP_WAITING'){
+    self.skipWaiting();
   }
 });
